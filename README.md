@@ -1,3 +1,3 @@
-# Extremely Parameter-Efficient Mixture of Experts (MoEs)
+# Extremely Parameter-Efficient Mixture of Experts
 
 Code will be released soon!
