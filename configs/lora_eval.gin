@@ -1,0 +1,79 @@
+# ginlint: disable=bad-import-order
+from __gin__ import dynamic_registration
+
+import seqio
+from t5x import models
+from t5x import utils
+from t5x import adafactor
+from t5x import partitioning
+from t5x import optimizers as optim
+from flax import linen
+from flax import traverse_util
+from flaxformer.components import dense
+from flaxformer.components.attention import dense_attention
+
+from src import adafactor_custom as c_optim
+from src import partitioning_custom as c_partitioning
+
+from src import utils as peft_utils
+from src import routing
+from src import lora
+
+include 't5x/configs/runs/eval.gin'
+
+# ========== Data Mixture ==========
+# SeqIO tasks for p3 (from original repo)
+import t0_data
+
+# ========== These are IA3 HPs you might want to override ==========
+# If you want to change the actual optimizer itself (to optim.Adam, etc), make
+# sure to update the optimizer that is passed to the MultiOptimizer.
+adafactor.Adafactor:
+  decay_rate = 0.8
+  step_offset = 0
+  logical_factor_rules = @c_optim.standard_logical_factor_rules()
+
+# ========== These are IA3 HPs you might want to override ==========
+partitioning.PjitPartitioner:
+  logical_axis_rules = @partitioning.standard_logical_axis_rules()
+
+partitioning.standard_logical_axis_rules:
+  additional_rules = @c_partitioning.standard_logical_axis_rules()
+
+# ========== ARCHITECTURE ==========
+dense_attention.MultiHeadDotProductAttention:
+  lora_output_conv = @attn/lora.LoRA()
+  lora_q_conv = @attn/lora.LoRAAttention()
+  lora_k_conv = @attn/lora.LoRAAttention()
+  lora_v_conv = @attn/lora.LoRAAttention()
+
+attn/lora.LoRAAttention:
+  rank = 16
+  num_heads = 16
+  dtype = 'bfloat16'
+  lora_axis_names_A = ('embed', 'rank')
+  lora_axis_names_B = ('rank', 'embed')
+
+attn/lora.LoRA:
+  rank = 16
+  dtype = 'bfloat16'
+  lora_axis_names_A = ('embed', 'rank')
+  lora_axis_names_B = ('rank', 'embed')
+
+dense.MlpBlock:
+  lora_intermediate_conv = @mlp1/lora.LoRA()
+  lora_output_conv = @mlp2/lora.LoRA()
+
+mlp1/lora.LoRA:
+  rank = 16
+  output_dim = 2816
+  dtype = 'bfloat16'
+  lora_axis_names_A = ('embed', 'rank')
+  lora_axis_names_B = ('rank', 'mlp')
+
+mlp2/lora.LoRA:
+  rank = 16
+  output_dim = 1024
+  dtype = 'bfloat16'
+  lora_axis_names_A = ('mlp', 'rank')
+  lora_axis_names_B = ('rank', 'embed')

@@ -1,0 +1,32 @@
+# ginlint: disable=bad-import-order
+from __gin__ import dynamic_registration
+
+import seqio
+from t5x import models
+from t5x import utils
+from t5x import adafactor
+from t5x import partitioning
+from t5x import optimizers as optim
+from flax import linen
+from flax import traverse_util
+
+include 't5x/configs/runs/finetune_no_eval.gin'
+
+# ========== Data Mixture ==========
+# SeqIO tasks for p3 (from original repo)
+import t0_data
+
+OPTIMIZER = @adafactor.Adafactor()
+adafactor.Adafactor:
+  decay_rate = 0.8
+  step_offset = 0
+  logical_factor_rules = @adafactor.standard_logical_factor_rules()
+
+utils.create_learning_rate_scheduler:
+  factors = "constant"
+  # Learning rate from the paper.
+  base_learning_rate = 1e-3
+
+utils.SaveCheckpointConfig:
+  period = 1000
+  keep = 60

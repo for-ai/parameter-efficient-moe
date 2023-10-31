@@ -1,0 +1,8 @@
+# ginlint: disable=bad-import-order
+from __gin__ import dynamic_registration
+
+include 't5x/configs/runs/eval.gin'
+
+# ========== Data Mixture ==========
+# SeqIO tasks for p3 (from original repo)
+import t0_data

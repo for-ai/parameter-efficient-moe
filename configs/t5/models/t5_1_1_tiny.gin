@@ -1,0 +1,12 @@
+# T5.1.1 Small model.
+# Provides MODEL
+
+include 'configs/t5/models/t5_1_1_base.gin'  # imports vocab, optimizer and model.
+
+# Architecture overrides
+NUM_HEADS = 2
+NUM_ENCODER_LAYERS = 1
+NUM_DECODER_LAYERS = 1
+HEAD_DIM = 16
+EMBED_DIM = 32
+MLP_DIM = 128

@@ -1,0 +1,111 @@
+# ginlint: disable=bad-import-order
+from __gin__ import dynamic_registration
+
+import seqio
+from t5x import models
+from t5x import utils
+from t5x import adafactor
+from t5x import optimizers as optim
+from flax import linen
+from flax import traverse_util
+from flaxformer.components import dense
+from flaxformer.components.attention import dense_attention
+
+from t5x import partitioning
+from src import adafactor_custom as c_optim
+from src import partitioning_custom as c_partitioning
+
+from src import utils as peft_utils
+from src import ia3
+
+include 't5x/configs/runs/finetune_no_eval.gin'
+
+# ========== Data Mixture ==========
+# SeqIO tasks for p3 (from original repo)
+import t0_data
+
+# ========== These are IA3 HPs you might want to override ==========
+# If you want to change the actual optimizer itself (to optim.Adam, etc), make
+# sure to update the optimizer that is passed to the MultiOptimizer.
+adafactor.Adafactor:
+  decay_rate = 0.8
+  step_offset = 0
+  logical_factor_rules = @c_optim.standard_logical_factor_rules()
+
+# ========== These are IA3 HPs you might want to override ==========
+partitioning.PjitPartitioner:
+  logical_axis_rules = @partitioning.standard_logical_axis_rules()
+
+partitioning.standard_logical_axis_rules:
+  additional_rules = @c_partitioning.standard_logical_axis_rules()
+
+# ========== Partial Loading ==========
+# The following is the configuration the allows to partially load a model (using
+# the values in a checkpoint) without it complaining that the shapes don't match
+# (because we have extra parameters, the ia3 scaling values) in our model.
+# You shouldn't need to update these outside of if you want to change the
+# optimizer itself.
+#
+# Optimizer
+# LR is set by `Trainer.learning_rate_fn`.
+# Use our MultiOptimizer wrapper to bind to the variadic
+# `*traversals_and_optimizers`
+OPTIMIZER = @optim.MultiOptimizer()
+optim.MultiOptimizer:
+  traversals_and_optimizers = ((@traverse_util.ModelParamTraversal(),
+                                @adafactor.Adafactor()),)
+traverse_util.ModelParamTraversal:
+  filter_fn = @peft_utils.match_any()
+# Our MultiOptimzier will match any parameter with a flattened name that
+# matches any of these regular expressions.
+TRAINABLE_REGEX = [".*/ia3_scaling.*"]
+peft_utils.match_any.regexes = %TRAINABLE_REGEX
+
+# These settings allow us to partially reload a checkpoint, that is, we can load
+# most of the model weights from the checkpoint, without it complaining that we
+# don't have a weight for our ia3 scaling values in the checkpoint.
+utils.RestoreCheckpointConfig:
+  # Activate the codepath that allows the merging of the optimizer state as
+  # specified in the config (with our new parameter) and the optimizer state as
+  # defined in the checkpoint.
+  fallback_to_scratch = True
+  # Use the T5X assignment map to grab values from the checkpoint. Each entry in
+  # the map is a regular expression that matches some flattened variable name in
+  # the optimizer state as defined in the model created by the config. The
+  # second value is the corresponding name in optimizer state as defined by the
+  # checkpoint. It supports interpolating capture groups from the initial regex.
+  # If the second pattern is `None` we skip trying to load this variable from
+  # the checkpoint.
+
+  # Skip trying to load all keys that have the word ia3_scaling in them, these
+  # will be initialized from scratch.
+  assignment_map = ((r"^.*ia3_scaling.*$", None),)
+
+utils.create_learning_rate_scheduler:
+  factors = "constant"
+  # Learning rate from the paper.
+  base_learning_rate = 3e-4
+
+#INITIAL_CHECKPOINT_PATH = None
+#utils.CheckpointConfig:
+#  restore = None
+
+utils.SaveCheckpointConfig:
+  period = 50000
+  keep = 60
+
+# ========== ARCHITECTURE ==========
+# Add ia3 to all attention implementations
+dense_attention.MultiHeadDotProductAttention:
+  k_conv = @ia3.IA3Attention()
+  v_conv = @ia3.IA3Attention()
+
+ia3.IA3Attention:
+  dtype = %ACTIVATION_DTYPE
+
+dense.MlpBlock:
+  intermediate_conv = @ia3.IA3()
+
+ia3.IA3:
+  axis_name = ('mlp',)
+  dtype = %ACTIVATION_DTYPE
